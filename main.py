@@ -70,8 +70,10 @@ def normalize_tid_key(tid: str) -> str:
     return ''.join(c if c.isalnum() else '_' for c in tid).lower()
 
 
-def _last_n_entries(obj, n: int = 7):
+def _last_n_entries(obj, n: int = 5):
     """Return the last n entries for lists or for dicts with common list fields.
+
+    Default n is 5 (we only include the last 5 points in LLM prompts to reduce token usage).
 
     - If obj is a dict and contains a 'data' or 'alerts' key with a list, return that list's last n items.
     - If obj is a list, return its last n items.
@@ -402,7 +404,7 @@ async def live_summary(from_ts: Optional[str] = None, to_ts: Optional[str] = Non
 
     # Build prompt with embedded JSON for the LLM
     towers_json = json.dumps(towers_resp, indent=2, ensure_ascii=False, default=str)
-    # Reduce timeseries size to the last 7 points to keep prompts short
+    # Reduce timeseries size to the last 5 points to keep prompts short
     latency_payload = _last_n_entries(latency_ts)
     speed_payload = _last_n_entries(speed_ts)
     users_payload = _last_n_entries(users_ts)
@@ -803,7 +805,7 @@ async def tower_root_cause(tower_id: str, from_ts: Optional[str] = None, to_ts: 
     # Build prompt
     try:
         t_json = json.dumps(t, indent=2, ensure_ascii=False, default=str)
-        # Keep only the last 7 entries for each timeseries to reduce prompt size
+    # Keep only the last 5 entries for each timeseries to reduce prompt size
         latency_payload = _last_n_entries(latency)
         users_payload = _last_n_entries(users_cong)
         packet_payload = _last_n_entries(packet)
