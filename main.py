@@ -894,30 +894,38 @@ Return the analysis as clean plain text with no markdown.
         }]
 
 
-@app.post('/summarize', response_model=SummarizeResponse)
-async def summarize(payload: SummarizeRequest):
-    """Receive towers/latest_metrics/alerts, call Groq LLM, and return a concise summary.
+@app.get('/summarize', response_model=SummarizeResponse)
+async def summarize(from_ts: Optional[str] = None, to_ts: Optional[str] = None):
+    """Collect current simulator snapshots, build a concise prompt and call the LLM.
 
-    Request body (JSON):
-      {
-        "towers": [...],
-        "latest_metrics": { ... },
-        "alerts": [...]
-      }
-
-    Response: { "summary": "..." }
+    This endpoint is a GET and accepts optional query params `from_ts` and `to_ts` to
+    indicate the time window the operator is interested in. If not provided, a
+    recent default window is used. No request body is required - the handler
+    gathers data from internal endpoints.
     """
 
-    # Build the prompt from the template with embedded JSON
-    # Convert Pydantic models to plain dicts first to avoid JSON serialization errors
-    payload_dict = payload.dict()
+    # Interpret optional time window for human-readable prompt context only
+    now = datetime.now(timezone.utc)
+    start = parse_time_or_default(from_ts, now - timedelta(hours=6))
+    end = parse_time_or_default(to_ts, now)
+
+    # gather live snapshots from the simulator
+    towers = await live_towers()
+    latest_metrics = await live_metrics()
+    alerts = await live_alerts()
+    payload_dict = {
+        'towers': towers,
+        'latest_metrics': latest_metrics,
+        'alerts': alerts
+    }
+
     towers_json = json.dumps(payload_dict.get('towers', []), indent=2, ensure_ascii=False, default=str)
     metrics_json = json.dumps(payload_dict.get('latest_metrics', {}), indent=2, ensure_ascii=False, default=str)
     alerts_json = json.dumps(payload_dict.get('alerts', []), indent=2, ensure_ascii=False, default=str)
 
     prompt = f"""
 You are a telecom network operations assistant.
-Generate a concise real-time summary of the network’s current condition.
+Generate a concise real-time summary of the network’s current condition for the window {start.isoformat()} to {end.isoformat()}.
 
 Use this structure exactly:
 
@@ -925,6 +933,8 @@ Use this structure exactly:
 2. Key Signals (bullet points)
 3. Probable Cause
 4. Recommended Actions
+
+Plain text no markdown
 
 ### Towers
 {towers_json}
@@ -948,42 +958,21 @@ Focus on:
 Keep it short, direct, and operational.
 """
 
-    # Instantiate Groq async client and call chat completion.
-    api_key = os.environ.get('GROQ_API_KEY')
-    if not api_key:
-        raise HTTPException(status_code=500, detail='GROQ_API_KEY not configured in environment')
+    # If no GROQ key is configured, return a short synthetic summary instead of calling the model
+    if not os.environ.get('GROQ_API_KEY'):
+        num_towers = len(SIM.towers)
+        num_alerts = len(SIM.alerts)
+        ts = datetime.now(timezone.utc).isoformat()
+        summary = f"# Network Situation Summary\n\n{num_towers} towers monitored, {num_alerts} active alerts.\n"
+        return {"summary": summary}
 
+    # Use centralized helper to call the LLM and return the model text
     try:
-        async with AsyncGroq(api_key=api_key) as client:
-            resp = await client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="openai/gpt-oss-20b",
-                temperature=0.3,
-                max_completion_tokens=512,
-                reasoning_effort="medium",
-                top_p=1,
-                stream=False,
-            )
-
-            # Extract model output (follow Groq client's response shape)
-            summary_text = None
-            try:
-                summary_text = resp.choices[0].message.content
-            except Exception:
-                # Fallback to attempt dict-style access
-                summary_text = getattr(resp.choices[0].message, 'content', None)
-
-            if not summary_text:
-                raise HTTPException(status_code=500, detail='No summary returned from model')
-
-            # Return typed response
-            return {"summary": summary_text}
-
-    except APIError as e:
-        # groq API error
-        raise HTTPException(status_code=502, detail=f'Groq API error: {str(e)}')
+        summary_text = await _call_groq(prompt)
+        return {"summary": summary_text}
+    except HTTPException:
+        raise
     except Exception as e:
-        # Generic error
         raise HTTPException(status_code=500, detail=f'Internal error: {str(e)}')
 
 
