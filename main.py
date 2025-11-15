@@ -1,9 +1,20 @@
 import asyncio
-from fastapi import FastAPI
+import os
+import json
+from typing import Any, Dict, List
+
+from dotenv import load_dotenv
+load_dotenv()
+
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from datetime import datetime, timezone
 from pathlib import Path
 from simulator.state import SimulatorState
+
+# Import the async Groq client. The package is added to requirements.txt.
+from groq import AsyncGroq, APIError
 
 app = FastAPI(title='Grafana Towers Live Simulator')
 
@@ -61,6 +72,102 @@ async def live_metrics():
 @app.get('/live/alerts')
 async def live_alerts():
     return JSONResponse(list(SIM.alerts.values()))
+
+
+class SummarizeRequest(BaseModel):
+    towers: List[Any]
+    latest_metrics: Dict[str, Any]
+    alerts: List[Any]
+
+
+@app.post('/summarize')
+async def summarize(payload: SummarizeRequest):
+    """Receive towers/latest_metrics/alerts, call Groq LLM, and return a concise summary.
+
+    Request body (JSON):
+      {
+        "towers": [...],
+        "latest_metrics": { ... },
+        "alerts": [...]
+      }
+
+    Response: { "summary": "..." }
+    """
+
+    # Build the prompt from the template with embedded JSON
+    towers_json = json.dumps(payload.towers, indent=2, ensure_ascii=False)
+    metrics_json = json.dumps(payload.latest_metrics, indent=2, ensure_ascii=False)
+    alerts_json = json.dumps(payload.alerts, indent=2, ensure_ascii=False)
+
+    prompt = f"""
+You are a telecom network operations assistant.
+Generate a concise real-time summary of the network’s current condition.
+
+Use this structure exactly:
+
+1. Situation Overview
+2. Key Signals (bullet points)
+3. Probable Cause
+4. Recommended Actions
+
+### Towers
+{towers_json}
+
+### Latest Metrics
+{metrics_json}
+
+### Alerts
+{alerts_json}
+
+Focus on:
+- latency waves
+- correlated tower failures
+- load spikes
+- speed degradation
+- congestion events
+- weather impact
+- backhaul degradation
+- SLA risk
+
+Keep it short, direct, and operational.
+"""
+
+    # Instantiate Groq async client and call chat completion.
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        raise HTTPException(status_code=500, detail='GROQ_API_KEY not configured in environment')
+
+    try:
+        async with AsyncGroq(api_key=api_key) as client:
+            resp = await client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="openai/gpt-oss-20b",
+                temperature=0.3,
+                max_completion_tokens=512,
+                reasoning_effort="medium",
+                top_p=1,
+                stream=False,
+            )
+
+            # Extract model output (follow Groq client's response shape)
+            summary_text = None
+            try:
+                summary_text = resp.choices[0].message.content
+            except Exception:
+                # Fallback to attempt dict-style access
+                summary_text = getattr(resp.choices[0].message, 'content', None)
+
+            if not summary_text:
+                raise HTTPException(status_code=500, detail='No summary returned from model')
+
+            return JSONResponse({"summary": summary_text})
+
+    except APIError as e:
+        # groq API error
+        raise HTTPException(status_code=502, detail=f'Groq API error: {str(e)}')
+    except Exception as e:
+        # Generic error
+        raise HTTPException(status_code=500, detail=f'Internal error: {str(e)}')
 
 if __name__ == '__main__':
     import uvicorn
