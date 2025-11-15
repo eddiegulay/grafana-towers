@@ -496,9 +496,11 @@ async def summarize(payload: SummarizeRequest):
     """
 
     # Build the prompt from the template with embedded JSON
-    towers_json = json.dumps(payload.towers, indent=2, ensure_ascii=False)
-    metrics_json = json.dumps(payload.latest_metrics, indent=2, ensure_ascii=False)
-    alerts_json = json.dumps(payload.alerts, indent=2, ensure_ascii=False)
+    # Convert Pydantic models to plain dicts first to avoid JSON serialization errors
+    payload_dict = payload.dict()
+    towers_json = json.dumps(payload_dict.get('towers', []), indent=2, ensure_ascii=False, default=str)
+    metrics_json = json.dumps(payload_dict.get('latest_metrics', {}), indent=2, ensure_ascii=False, default=str)
+    alerts_json = json.dumps(payload_dict.get('alerts', []), indent=2, ensure_ascii=False, default=str)
 
     prompt = f"""
 You are a telecom network operations assistant.
