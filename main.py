@@ -351,36 +351,101 @@ async def towers_congestion_timeseries(from_ts: Optional[str] = None, to_ts: Opt
 
 
 @app.get('/live/summary')
-async def live_summary():
-    """Aggregate /live/towers, /live/metrics and /live/alerts and call summarizer. If Groq not configured, return simple generated summary."""
-    # gather current state
-    towers_resp = await live_towers()
-    metrics_resp = await live_metrics()
-    alerts_resp = await live_alerts()
+async def live_summary(from_ts: Optional[str] = None, to_ts: Optional[str] = None, step: Optional[int] = 3600, tower_ids: Optional[str] = None):
+    """Aggregate data over a requested time window and call the LLM summarizer.
 
-    # Build SummarizeRequest-like payload
-    payload = {
-        'towers': towers_resp,
-        'latest_metrics': metrics_resp,
-        'alerts': alerts_resp
-    }
+    Query parameters (optional): from_ts, to_ts, step, tower_ids
+    If GROQ_API_KEY is not configured, falls back to a short generated summary.
+    """
 
-    # Try to POST to existing summarize handler (call function) and return its response if possible
+    now = datetime.now(timezone.utc)
+    default_from = now - timedelta(hours=6)
+    start = parse_time_or_default(from_ts, default_from)
+    end = parse_time_or_default(to_ts, now)
+    if start >= end:
+        return error_response('Invalid time range', 'From timestamp must be before to timestamp', 'INVALID_TIME_RANGE')
+
+    step = int(step or 3600)
+
+    # Gather timeseries snapshots by calling existing helpers
     try:
-        # call summarize function directly
-        sreq = SummarizeRequest(**payload)
-        res = await summarize(sreq)
-        # summarize returns dict-like
-        if isinstance(res, JSONResponse):
-            return res
-        return {'summary': res.get('summary') if isinstance(res, dict) else res}
+        latency_ts = await towers_latency_timeseries(from_ts=start.isoformat(), to_ts=end.isoformat(), step=step, tower_ids=tower_ids)
+        speed_ts = await towers_speed_timeseries(from_ts=start.isoformat(), to_ts=end.isoformat(), step=step, tower_ids=tower_ids)
+        users_ts = await towers_users_timeseries(from_ts=start.isoformat(), to_ts=end.isoformat(), step=step)
+        congestion_ts = await towers_congestion_timeseries(from_ts=start.isoformat(), to_ts=end.isoformat(), step=step, tower_ids=tower_ids)
+        events_ts = await events_timeseries(from_ts=start.isoformat(), to_ts=end.isoformat(), step=step)
+        towers_resp = await live_towers()
+        alerts_resp = await live_alerts()
     except Exception as e:
-        # fallback simple summary
         num_towers = len(SIM.towers)
         num_alerts = len(SIM.alerts)
         ts = datetime.now(timezone.utc).isoformat()
-        summary = f"# Network Situation Summary\n\n{num_towers} towers monitored, {num_alerts} active alerts. Latest metrics timestamp: {metrics_resp.get('timestamp') if isinstance(metrics_resp, dict) else ''}\n"
-        return {'summary': summary, 'generated_at': ts, 'data_sources': {'towers': num_towers, 'alerts': num_alerts, 'metrics_timestamp': metrics_resp.get('timestamp') if isinstance(metrics_resp, dict) else ''}}
+        summary = f"# Network Situation Summary\n\n{num_towers} towers monitored, {num_alerts} active alerts.\n"
+        return {'summary': summary, 'generated_at': ts, 'data_sources_error': str(e)}
+
+    # Build prompt with embedded JSON for the LLM
+    towers_json = json.dumps(towers_resp, indent=2, ensure_ascii=False, default=str)
+    latency_json = json.dumps(latency_ts.get('data') if isinstance(latency_ts, dict) else latency_ts, indent=2, ensure_ascii=False, default=str)
+    speed_json = json.dumps(speed_ts.get('data') if isinstance(speed_ts, dict) else speed_ts, indent=2, ensure_ascii=False, default=str)
+    users_json = json.dumps(users_ts.get('data') if isinstance(users_ts, dict) else users_ts, indent=2, ensure_ascii=False, default=str)
+    congestion_json = json.dumps(congestion_ts.get('data') if isinstance(congestion_ts, dict) else congestion_ts, indent=2, ensure_ascii=False, default=str)
+    events_json = json.dumps(events_ts.get('data') if isinstance(events_ts, dict) else events_ts, indent=2, ensure_ascii=False, default=str)
+
+    prompt = f"""
+You are a telecom network operations assistant. Produce a concise operational summary for the time window {start.isoformat()} to {end.isoformat()}.
+
+Return sections: 1) Situation Overview, 2) Key Signals (bullets), 3) Probable Cause, 4) Recommended Actions.
+
+### Towers (current snapshot)
+{towers_json}
+
+### Latency timeseries (per-tower)
+{latency_json}
+
+### Speed timeseries (per-tower)
+{speed_json}
+
+### Users timeseries (per-tower)
+{users_json}
+
+### Congestion timeseries (per-tower)
+{congestion_json}
+
+### Events timeseries
+{events_json}
+
+Focus on correlated failures, load spikes, latency waves, speed degradation, congestion, backhaul issues, and SLA risk. Keep it short and actionable.
+"""
+
+    # If no GROQ key is configured, return a short synthetic summary instead of calling the model
+    if not os.environ.get('GROQ_API_KEY'):
+        num_towers = len(SIM.towers)
+        num_alerts = len(SIM.alerts)
+        ts = datetime.now(timezone.utc).isoformat()
+        summary = f"# Network Situation Summary\n\n{num_towers} towers monitored, {num_alerts} active alerts.\n"
+        return {'summary': summary, 'generated_at': ts, 'data_sources': {'towers': num_towers, 'alerts': num_alerts}}
+
+    try:
+        summary_text = await _call_groq(prompt)
+        return {
+            'summary': summary_text,
+            'generated_at': datetime.now(timezone.utc).isoformat(),
+            'from': start.isoformat(),
+            'to': end.isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        num_towers = len(SIM.towers)
+        num_alerts = len(SIM.alerts)
+        ts = datetime.now(timezone.utc).isoformat()
+        summary = f"# Network Situation Summary\n\n{num_towers} towers monitored, {num_alerts} active alerts.\n"
+        return {
+            'summary': summary,
+            'generated_at': ts,
+            'data_sources': {'towers': num_towers, 'alerts': num_alerts},
+            'llm_error': str(e)
+        }
 
 
 @app.get('/live/metrics/speed/hourly')
@@ -683,7 +748,7 @@ async def tower_alerts(tower_id: str, limit: Optional[int] = 50, status: Optiona
 
 @app.get('/api/towers/{tower_id}/analysis/root-cause')
 async def tower_root_cause(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None):
-    # Very small synthetic analysis based on recent metrics and alerts
+    # Use timeseries data across the requested window and call the LLM to produce a focused root-cause-style summary.
     t = SIM.towers.get(tower_id)
     if not t:
         raise HTTPException(status_code=404, detail='Tower not found')
@@ -691,27 +756,74 @@ async def tower_root_cause(tower_id: str, from_ts: Optional[str] = None, to_ts: 
     to_dt = parse_time_or_default(to_ts, now)
     from_dt = parse_time_or_default(from_ts, now - timedelta(hours=6))
 
-    summary = ''
-    insights = []
-    # look at status and backhaul
-    if t.get('backhaul_state','Normal') != 'Normal':
-        summary = 'Backhaul degradation detected; likely root cause for elevated latency.'
-        insights.append({'type': 'backhaul', 'evidence': 'backhaul_state != Normal'})
-    elif t.get('congestion',0) == 1:
-        summary = 'High user load / congestion is the likely cause of degraded performance.'
-        insights.append({'type': 'congestion', 'evidence': f"users_connected={t.get('users_connected',0)}"})
-    else:
-        summary = 'No single dominating fault; minor latency fluctuations observed.'
-        insights.append({'type': 'noise', 'evidence': 'no alerts, slight latency variance'})
+    # Collect relevant timeseries for this tower
+    try:
+        latency = await tower_latency_timeseries(tower_id, from_ts=from_dt.isoformat(), to_ts=to_dt.isoformat(), step=60)
+        users_cong = await tower_users_congestion_timeseries(tower_id, from_ts=from_dt.isoformat(), to_ts=to_dt.isoformat(), step=60)
+        packet = await tower_packet_loss_timeseries(tower_id, from_ts=from_dt.isoformat(), to_ts=to_dt.isoformat(), step=60)
+        backhaul = await tower_backhaul_timeseries(tower_id, from_ts=from_dt.isoformat(), to_ts=to_dt.isoformat(), step=60)
+        alerts = await tower_alerts(tower_id)
+    except Exception as e:
+        # revert to synthetic analysis if any collection fails
+        summary = 'Insufficient data to perform LLM-based analysis; returning synthetic result.'
+        insights = [{'type': 'error', 'evidence': str(e)}]
+        return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary, 'insights': insights}
 
-    result = {
-        'tower_id': tower_id,
-        'analysis_timestamp': now.isoformat(),
-        'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()},
-        'summary': summary,
-        'insights': insights
-    }
-    return result
+    # Build prompt
+    try:
+        t_json = json.dumps(t, indent=2, ensure_ascii=False, default=str)
+        latency_json = json.dumps(latency.get('data') if isinstance(latency, dict) else latency, indent=2, ensure_ascii=False, default=str)
+        users_json = json.dumps(users_cong.get('data') if isinstance(users_cong, dict) else users_cong, indent=2, ensure_ascii=False, default=str)
+        packet_json = json.dumps(packet.get('data') if isinstance(packet, dict) else packet, indent=2, ensure_ascii=False, default=str)
+        backhaul_json = json.dumps(backhaul.get('data') if isinstance(backhaul, dict) else backhaul, indent=2, ensure_ascii=False, default=str)
+        alerts_json = json.dumps(alerts.get('alerts') if isinstance(alerts, dict) else alerts, indent=2, ensure_ascii=False, default=str)
+
+        prompt = f"""
+You are a telecom network operations assistant. Provide a short root-cause style analysis for tower {tower_id} over the window {from_dt.isoformat()} to {to_dt.isoformat()}.
+
+Include: Situation (1-2 sentences), Key signals (bullets), Most likely root cause, Suggested next actions.
+
+### Tower
+{t_json}
+
+### Latency timeseries
+{latency_json}
+
+### Users / congestion timeseries
+{users_json}
+
+### Packet loss timeseries
+{packet_json}
+
+### Backhaul timeseries
+{backhaul_json}
+
+### Alerts
+{alerts_json}
+"""
+
+        # If no GROQ key is configured, return a short synthetic analysis instead of calling the model
+        if not os.environ.get('GROQ_API_KEY'):
+            # lightweight synthetic analysis
+            summary = 'LLM not configured; returning synthetic root-cause hint. Check tower metrics and backhaul state.'
+            insights = []
+            if t.get('backhaul_state','Normal') != 'Normal':
+                insights.append({'type': 'backhaul', 'evidence': 'backhaul_state != Normal'})
+            elif t.get('congestion',0) == 1:
+                insights.append({'type': 'congestion', 'evidence': f"users_connected={t.get('users_connected',0)}"})
+            else:
+                insights.append({'type': 'noise', 'evidence': 'no alerts, slight latency variance'})
+            return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary, 'insights': insights}
+
+        summary_text = await _call_groq(prompt)
+        return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary_text}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # fallback synthetic
+        summary = 'LLM summarization failed; returning synthetic analysis.'
+        insights = [{'type': 'error', 'evidence': str(e)}]
+        return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary, 'insights': insights}
 
 
 @app.post('/summarize', response_model=SummarizeResponse)
@@ -804,6 +916,45 @@ Keep it short, direct, and operational.
         raise HTTPException(status_code=502, detail=f'Groq API error: {str(e)}')
     except Exception as e:
         # Generic error
+        raise HTTPException(status_code=500, detail=f'Internal error: {str(e)}')
+
+
+async def _call_groq(prompt: str) -> str:
+    """Helper to call the Groq async client and return the model content string.
+
+    Raises HTTPException on errors so callers can surface appropriate HTTP responses.
+    """
+    api_key = os.environ.get('GROQ_API_KEY')
+    if not api_key:
+        raise HTTPException(status_code=500, detail='GROQ_API_KEY not configured in environment')
+
+    try:
+        async with AsyncGroq(api_key=api_key) as client:
+            resp = await client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="openai/gpt-oss-20b",
+                temperature=0.3,
+                max_completion_tokens=512,
+                reasoning_effort="medium",
+                top_p=1,
+                stream=False,
+            )
+
+            summary_text = None
+            try:
+                summary_text = resp.choices[0].message.content
+            except Exception:
+                summary_text = getattr(resp.choices[0].message, 'content', None)
+
+            if not summary_text:
+                raise HTTPException(status_code=500, detail='No summary returned from model')
+            return summary_text
+
+    except APIError as e:
+        raise HTTPException(status_code=502, detail=f'Groq API error: {str(e)}')
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f'Internal error: {str(e)}')
 
 if __name__ == '__main__':
