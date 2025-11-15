@@ -79,6 +79,7 @@ def _last_n_entries(obj, n: int = 3):
     - If obj is a list, return its last n items.
     - Otherwise return obj unchanged.
     """
+    n=2
     if isinstance(obj, dict):
         for key in ('data', 'alerts'):
             if key in obj and isinstance(obj[key], list):
