@@ -479,7 +479,25 @@ Focus on correlated failures, load spikes, latency waves, speed degradation, con
             _summary_cache.clear()
             _summary_cache.update(resp)
         return resp
-    except HTTPException:
+    except HTTPException as he:
+        # Treat server-side errors (5xx) from the LLM as recoverable: return cached result if available.
+        status = getattr(he, 'status_code', 0)
+        if status >= 500:
+            async with _summary_cache_lock:
+                if _summary_cache:
+                    return dict(_summary_cache)
+            # fall through to synthetic fallback
+            num_towers = len(SIM.towers)
+            num_alerts = len(SIM.alerts)
+            ts = datetime.now(timezone.utc).isoformat()
+            summary = f"# Network Situation Summary\n\n{num_towers} towers monitored, {num_alerts} active alerts.\n"
+            return {
+                'summary': summary,
+                'generated_at': ts,
+                'data_sources': {'towers': num_towers, 'alerts': num_alerts},
+                'llm_error': str(he)
+            }
+        # For client errors (4xx) re-raise so the client sees the error
         raise
     except Exception as e:
         # If we have a cached result, return it as a best-effort fallback
@@ -914,7 +932,26 @@ Return the analysis as clean plain text with no markdown.
         async with _root_cause_cache_lock:
             _root_cause_cache[tower_id] = result
         return result
-    except HTTPException:
+    except HTTPException as he:
+        # If the LLM returned a server-side error, try to return cached analysis for this tower
+        status = getattr(he, 'status_code', 0)
+        if status >= 500:
+            async with _root_cause_cache_lock:
+                cached = _root_cause_cache.get(tower_id)
+                if cached:
+                    return cached
+            # fallback to synthetic if no cache
+            summary = 'LLM not available; returning synthetic root-cause hint.'
+            insights = {'llm_error': str(he)}
+            return [{
+                'tower_id': tower_id,
+                'analysis_timestamp': now.isoformat(),
+                'time_window_from': from_dt.isoformat(),
+                'time_window_to': to_dt.isoformat(),
+                'summary': summary,
+                'insights': insights
+            }]
+        # re-raise client errors
         raise
     except Exception as e:
         # If we have a cached result for this tower, return it as best-effort fallback
