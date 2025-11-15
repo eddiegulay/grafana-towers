@@ -41,3 +41,20 @@ Notes
 -----
 - The `docker-compose.yml` includes a lightweight `ngrok` service (image `wernight/ngrok:latest`). Provide `NGROK_AUTHTOKEN` in a local `.env` or your environment if you want a public tunnel.
 - Use Grafana's Infinity/JSON API plugin to poll `/live/towers`, `/live/metrics`, and `/live/alerts` every 5–10s.
+
+Local ngrok helper
+------------------
+
+This repo ships a local `ngrok` binary (Linux amd64) and a helper script `start-ngrok.sh` to make it easy to run a tunnel locally.
+
+1. Copy `.env.example` to `.env` and add your `NGROK_AUTHTOKEN`.
+
+```bash
+cp .env.example .env
+# edit .env and set NGROK_AUTHTOKEN
+./start-ngrok.sh
+```
+
+2. If `NGROK_AUTHTOKEN` is present the script will configure it (via `ngrok authtoken`) and start a tunnel to port 8000. The ngrok web UI will be available at http://localhost:4040.
+
+If you prefer the system installation of ngrok, you can remove the repository binary and use your system `ngrok` instead. The docker-compose setup uses an ngrok image and requires `NGROK_AUTHTOKEN` in `.env` to create a public tunnel.
