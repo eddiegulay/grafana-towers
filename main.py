@@ -89,6 +89,16 @@ def _last_n_entries(obj, n: int = 5):
     return obj
 
 
+# Simple in-memory caches for the last successful LLM outputs.
+# - _summary_cache stores the last successful response for the global summary (as a dict)
+# - _root_cause_cache stores per-tower last successful responses (tower_id -> response)
+# These are protected by asyncio locks to avoid concurrent mutation races.
+_summary_cache: Dict[str, Any] = {}
+_summary_cache_lock = asyncio.Lock()
+_root_cause_cache: Dict[str, Any] = {}
+_root_cause_cache_lock = asyncio.Lock()
+
+
 # Import the async Groq client. The package is added to requirements.txt.
 from groq import AsyncGroq, APIError
 
@@ -445,6 +455,11 @@ Focus on correlated failures, load spikes, latency waves, speed degradation, con
 
     # If no GROQ key is configured, return a short synthetic summary instead of calling the model
     if not os.environ.get('GROQ_API_KEY'):
+        # If we have a cached successful summary, return it instead of generating synthetic text
+        async with _summary_cache_lock:
+            if _summary_cache:
+                return dict(_summary_cache)
+
         num_towers = len(SIM.towers)
         num_alerts = len(SIM.alerts)
         ts = datetime.now(timezone.utc).isoformat()
@@ -453,15 +468,25 @@ Focus on correlated failures, load spikes, latency waves, speed degradation, con
 
     try:
         summary_text = await _call_groq(prompt)
-        return {
+        resp = {
             'summary': summary_text,
             'generated_at': datetime.now(timezone.utc).isoformat(),
             'from': start.isoformat(),
             'to': end.isoformat()
         }
+        # update cache with the last successful AI response
+        async with _summary_cache_lock:
+            _summary_cache.clear()
+            _summary_cache.update(resp)
+        return resp
     except HTTPException:
         raise
     except Exception as e:
+        # If we have a cached result, return it as a best-effort fallback
+        async with _summary_cache_lock:
+            if _summary_cache:
+                return dict(_summary_cache)
+
         num_towers = len(SIM.towers)
         num_alerts = len(SIM.alerts)
         ts = datetime.now(timezone.utc).isoformat()
@@ -858,8 +883,13 @@ Return the analysis as clean plain text with no markdown.
 
 """
 
-        # If no GROQ key is configured, return a short synthetic analysis instead of calling the model
+        # If no GROQ key is configured, return cached result if available; otherwise synthetic
         if not os.environ.get('GROQ_API_KEY'):
+            async with _root_cause_cache_lock:
+                cached = _root_cause_cache.get(tower_id)
+                if cached:
+                    return cached
+
             # lightweight synthetic analysis
             summary = 'LLM not configured; returning synthetic root-cause hint. Check tower metrics and backhaul state.'
             insights = []
@@ -879,10 +909,20 @@ Return the analysis as clean plain text with no markdown.
             }
 
         summary_text = await _call_groq(prompt)
-        return [{'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary_text}]
+        result = [{'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary_text}]
+        # cache per-tower successful AI analysis
+        async with _root_cause_cache_lock:
+            _root_cause_cache[tower_id] = result
+        return result
     except HTTPException:
         raise
     except Exception as e:
+        # If we have a cached result for this tower, return it as best-effort fallback
+        async with _root_cause_cache_lock:
+            cached = _root_cause_cache.get(tower_id)
+            if cached:
+                return cached
+
         # fallback synthetic
         summary = 'LLM summarization failed; returning synthetic analysis.'
         insights = {'error': str(e)}
