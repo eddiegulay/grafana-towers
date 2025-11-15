@@ -1001,7 +1001,9 @@ async def summarize(from_ts: Optional[str] = None, to_ts: Optional[str] = None):
 
     towers_json = json.dumps(payload_dict.get('towers', []), indent=2, ensure_ascii=False, default=str)
     metrics_json = json.dumps(payload_dict.get('latest_metrics', {}), indent=2, ensure_ascii=False, default=str)
-    alerts_json = json.dumps(payload_dict.get('alerts', []), indent=2, ensure_ascii=False, default=str)
+    # reduce alerts list size to last N entries to keep prompts compact
+    alerts_short = _last_n_entries(payload_dict.get('alerts', []), n=5)
+    alerts_json = json.dumps(alerts_short, indent=2, ensure_ascii=False, default=str)
 
     prompt = f"""
 You are a telecom network operations assistant.
