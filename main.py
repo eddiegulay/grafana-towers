@@ -70,7 +70,7 @@ def normalize_tid_key(tid: str) -> str:
     return ''.join(c if c.isalnum() else '_' for c in tid).lower()
 
 
-def _last_n_entries(obj, n: int = 5):
+def _last_n_entries(obj, n: int = 3):
     """Return the last n entries for lists or for dicts with common list fields.
 
     Default n is 5 (we only include the last 5 points in LLM prompts to reduce token usage).
