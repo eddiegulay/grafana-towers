@@ -1,0 +1,172 @@
+openapi: 3.0.3
+info:
+  title: Grafana Towers Simulator API
+  version: "1.0.0"
+  description: >-
+    Minimal OpenAPI spec for the simulator endpoints used by the Grafana dashboard.
+paths:
+  /live/metrics/towers/latency/timeseries:
+    get:
+      summary: Per-tower latency timeseries
+      parameters:
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 10800
+        - name: tower_ids
+          in: query
+          schema:
+            type: string
+            description: Comma separated tower ids (e.g. "Tower-1,Tower-5")
+      responses:
+        '200':
+          description: Time series of latency per tower.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      example:
+                        timestamp: "2025-11-15T10:00:00Z"
+                        tower_1: 45.2
+                        tower_2: 59.8
+                  metadata:
+                    type: object
+  /live/metrics/towers/speed/timeseries:
+    get:
+      summary: Per-tower download/upload speed timeseries (supports status filter)
+      parameters:
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 10800
+        - name: tower_ids
+          in: query
+          schema:
+            type: string
+        - name: status_filter
+          in: query
+          schema:
+            type: string
+            enum: [critical, warning, good]
+      responses:
+        '200':
+          description: Time series of download and upload speeds per tower.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      example:
+                        timestamp: "2025-11-15T10:00:00Z"
+                        tower_1_down: 26.5
+                        tower_1_up: 9.8
+                        tower_5_down: 18.3
+                        tower_5_up: 6.2
+  /live/metrics/towers/users/timeseries:
+    get:
+      summary: User load per tower (stacked)
+      parameters:
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 10800
+      responses:
+        '200':
+          description: Time series of users per tower.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      example:
+                        timestamp: "2025-11-15T10:00:00Z"
+                        tower_1: 450
+                        tower_2: 844
+  /live/metrics/towers/congestion/timeseries:
+    get:
+      summary: Congestion events per tower (binary 0/1)
+      parameters:
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 10800
+        - name: tower_ids
+          in: query
+          schema:
+            type: string
+            description: Comma separated list of tower ids to include
+      responses:
+        '200':
+          description: Time series of congestion flags per tower.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      example:
+                        timestamp: "2025-11-15T10:00:00Z"
+                        tower_1: 0
+                        tower_5: 1
+                        tower_6: 0
+components: {}

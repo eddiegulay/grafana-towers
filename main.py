@@ -60,6 +60,15 @@ def towers_included_list(tower_ids: Optional[str]) -> List[str]:
         return list(SIM.towers.keys())
     return [t.strip() for t in tower_ids.split(',') if t.strip()]
 
+def normalize_tid_key(tid: str) -> str:
+    """Normalize tower id to keys like 'tower_1' when possible, otherwise sanitize."""
+    import re
+    m = re.search(r"(\d+)$", tid)
+    if m:
+        return f"tower_{int(m.group(1))}"
+    # fallback: lowercase and replace non-alnum with underscore
+    return ''.join(c if c.isalnum() else '_' for c in tid).lower()
+
 
 # Import the async Groq client. The package is added to requirements.txt.
 from groq import AsyncGroq, APIError
@@ -232,16 +241,19 @@ async def towers_latency_timeseries(from_ts: Optional[str] = None, to_ts: Option
     step = int(step or 10800)
     points = make_time_range(start, end, step)
     tids = towers_included_list(tower_ids)
+    # Build normalized mapping: tid -> key (tower_1, ...)
+    key_map = {tid: normalize_tid_key(tid) for tid in tids}
     data = []
     for ts in points:
         row = {'timestamp': ts.isoformat()}
         for tid in tids:
             t = SIM.towers.get(tid)
+            key = key_map[tid]
             if not t:
-                row[tid] = None
+                row[key] = None
                 continue
             # simulate slight variation
-            row[tid] = round(max(0.0, t['latency'] * random.uniform(0.85, 1.25)), 2)
+            row[key] = round(max(0.0, t['latency'] * random.uniform(0.85, 1.25)), 2)
         data.append(row)
     metadata = {'from': start.isoformat(), 'to': end.isoformat(), 'step': step, 'points': len(points), 'towers_included': tids}
     return {'data': data, 'metadata': metadata}
@@ -261,15 +273,22 @@ async def towers_speed_timeseries(from_ts: Optional[str] = None, to_ts: Optional
     # apply status filter if provided
     if status_filter:
         sf = status_filter.lower()
-        tids = [tid for tid in tids if sf == SIM.towers.get(tid,{}).get('status','').lower()]
+        tids = [tid for tid in tids if sf == SIM.towers.get(tid, {}).get('status', '').lower()]
+
+    # normalize keys
+    key_map = {tid: normalize_tid_key(tid) for tid in tids}
     data = []
     for ts in points:
         row = {'timestamp': ts.isoformat()}
         for tid in tids:
             t = SIM.towers.get(tid)
-            if not t: continue
-            row[f"{tid}_down"] = round(max(0.0, t['download_speed'] * random.uniform(0.75, 1.2)), 2)
-            row[f"{tid}_up"] = round(max(0.0, t['upload_speed'] * random.uniform(0.75, 1.2)), 2)
+            key = key_map[tid]
+            if not t:
+                row[f"{key}_down"] = None
+                row[f"{key}_up"] = None
+                continue
+            row[f"{key}_down"] = round(max(0.0, t['download_speed'] * random.uniform(0.75, 1.2)), 2)
+            row[f"{key}_up"] = round(max(0.0, t['upload_speed'] * random.uniform(0.75, 1.2)), 2)
         data.append(row)
     metadata = {'from': start.isoformat(), 'to': end.isoformat(), 'step': step, 'points': len(points), 'towers_included': tids}
     return {'data': data, 'metadata': metadata}
@@ -286,15 +305,17 @@ async def towers_users_timeseries(from_ts: Optional[str] = None, to_ts: Optional
     step = int(step or 10800)
     points = make_time_range(start, end, step)
     tids = list(SIM.towers.keys())
+    key_map = {tid: normalize_tid_key(tid) for tid in tids}
     data = []
     for ts in points:
         row = {'timestamp': ts.isoformat()}
         for tid in tids:
             t = SIM.towers.get(tid)
+            key = key_map[tid]
             if not t:
-                row[tid] = 0
+                row[key] = 0
             else:
-                row[tid] = int(max(0, t['users_connected'] * random.uniform(0.6, 1.4)))
+                row[key] = int(max(0, t['users_connected'] * random.uniform(0.6, 1.4)))
         data.append(row)
     metadata = {'from': start.isoformat(), 'to': end.isoformat(), 'step': step, 'points': len(points), 'towers_included': tids}
     return {'data': data, 'metadata': metadata}
@@ -311,17 +332,19 @@ async def towers_congestion_timeseries(from_ts: Optional[str] = None, to_ts: Opt
     step = int(step or 10800)
     points = make_time_range(start, end, step)
     tids = towers_included_list(tower_ids)
+    key_map = {tid: normalize_tid_key(tid) for tid in tids}
     data = []
     for ts in points:
         row = {'timestamp': ts.isoformat()}
         for tid in tids:
             t = SIM.towers.get(tid)
+            key = key_map[tid]
             if not t:
-                row[tid] = 0
+                row[key] = 0
             else:
                 # simulate occasional congestion events
                 base = t.get('congestion', 0)
-                row[tid] = 1 if (base == 1 and random.random() < 0.8) or (random.random() < 0.03) else 0
+                row[key] = 1 if (base == 1 and random.random() < 0.8) or (random.random() < 0.03) else 0
         data.append(row)
     metadata = {'from': start.isoformat(), 'to': end.isoformat(), 'step': step, 'points': len(points), 'towers_included': tids}
     return {'data': data, 'metadata': metadata}
