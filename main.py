@@ -481,6 +481,239 @@ async def live_alerts():
     return out
 
 
+##########################
+# Per-tower drill-down API
+##########################
+
+
+def _map_status_numeric(status_str: str) -> int:
+    s = (status_str or '').lower()
+    if s in ('good', 'healthy', 'ok'):
+        return 1
+    if s in ('warning', 'degraded'):
+        return 2
+    if s in ('critical', 'down', 'failed'):
+        return 3
+    return 2
+
+
+@app.get('/api/towers/{tower_id}/status')
+async def tower_status(tower_id: str):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    # Simulate uptime and last_maintenance if not present
+    uptime_hours = int(random.randint(24, 24 * 90))
+    last_maint = (now - timedelta(hours=random.randint(24, 24 * 90))).isoformat()
+    resp = {
+        'tower_id': t['tower_id'],
+        'location_name': t.get('location_name', ''),
+        'latitude': t.get('latitude'),
+        'longitude': t.get('longitude'),
+        'status': _map_status_numeric(t.get('status', 'Warning')),
+        'uptime_hours': uptime_hours,
+        'last_maintenance': last_maint,
+        'backhaul_type': 'fiber' if random.random() < 0.7 else 'microwave',
+        'supported_technologies': ['5G', 'LTE'],
+        'timestamp': now.isoformat()
+    }
+    return resp
+
+
+@app.get('/api/towers/{tower_id}/metrics/current')
+async def tower_metrics_current(tower_id: str):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    congestion_percent = round(100.0 * (1.0 if t.get('congestion', 0) else random.random() * 0.4), 1)
+    health_score = max(0.0, min(100.0, 100.0 - (t.get('latency', 0) / 5.0) + (t.get('download_speed', 0) / 5.0) * 0.2))
+    return {
+        'tower_id': t['tower_id'],
+        'timestamp': now.isoformat(),
+        'latency_ms': float(t.get('latency', 0.0)),
+        'download_speed_mbps': float(t.get('download_speed', 0.0)),
+        'upload_speed_mbps': float(t.get('upload_speed', 0.0)),
+        'active_users': int(t.get('users_connected', 0)),
+        'congestion_percent': round(congestion_percent, 1),
+        'health_score': round(health_score, 1)
+    }
+
+
+@app.get('/api/towers/{tower_id}/metrics/latency/timeseries')
+async def tower_latency_timeseries(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None, step: Optional[int] = 60):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    default_from = now - timedelta(hours=6)
+    start = parse_time_or_default(from_ts, default_from)
+    end = parse_time_or_default(to_ts, now)
+    if start >= end:
+        return error_response('Invalid time range', 'From timestamp must be before to timestamp', 'INVALID_TIME_RANGE')
+    step = int(step or 60)
+    points = make_time_range(start, end, step)
+    data = []
+    base = float(t.get('latency', 20.0))
+    for ts in points:
+        # small random walk around base, occasional spike
+        val = base * random.uniform(0.9, 1.2)
+        if random.random() < 0.01:
+            val *= random.uniform(1.5, 3.0)
+        data.append({'timestamp': ts.isoformat(), 'value': round(val, 2)})
+    return {'tower_id': tower_id, 'metric': 'latency_ms', 'data': data}
+
+
+@app.get('/api/towers/{tower_id}/metrics/users-congestion/timeseries')
+async def tower_users_congestion_timeseries(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None, step: Optional[int] = 60):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    default_from = now - timedelta(hours=6)
+    start = parse_time_or_default(from_ts, default_from)
+    end = parse_time_or_default(to_ts, now)
+    if start >= end:
+        return error_response('Invalid time range', 'From timestamp must be before to timestamp', 'INVALID_TIME_RANGE')
+    step = int(step or 60)
+    points = make_time_range(start, end, step)
+    data = []
+    base_users = int(t.get('users_connected', 100))
+    for ts in points:
+        users = max(0, int(base_users * random.uniform(0.7, 1.4)))
+        # congestion if users spike or existing congestion flag
+        congestion_active = 1 if (t.get('congestion', 0) == 1 and random.random() < 0.8) or (users > base_users * 1.2) else 0
+        data.append({'timestamp': ts.isoformat(), 'active_users': users, 'congestion_active': congestion_active})
+    return {'tower_id': tower_id, 'data': data}
+
+
+@app.get('/api/towers/{tower_id}/metrics/packet-loss/timeseries')
+async def tower_packet_loss_timeseries(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None, step: Optional[int] = 60):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    default_from = now - timedelta(hours=6)
+    start = parse_time_or_default(from_ts, default_from)
+    end = parse_time_or_default(to_ts, now)
+    if start >= end:
+        return error_response('Invalid time range', 'From timestamp must be before to timestamp', 'INVALID_TIME_RANGE')
+    step = int(step or 60)
+    points = make_time_range(start, end, step)
+    data = []
+    for ts in points:
+        # small baseline loss with occasional spikes
+        up = round(random.uniform(0.0, 1.2), 2)
+        down = round(random.uniform(0.0, 1.0), 2)
+        if random.random() < 0.02:
+            up = round(up + random.uniform(1.0, 4.0), 2)
+            down = round(down + random.uniform(0.5, 3.0), 2)
+        data.append({'timestamp': ts.isoformat(), 'uplink_loss_percent': up, 'downlink_loss_percent': down})
+    return {'tower_id': tower_id, 'data': data}
+
+
+@app.get('/api/towers/{tower_id}/metrics/backhaul/timeseries')
+async def tower_backhaul_timeseries(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None, step: Optional[int] = 60):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    default_from = now - timedelta(hours=6)
+    start = parse_time_or_default(from_ts, default_from)
+    end = parse_time_or_default(to_ts, now)
+    if start >= end:
+        return error_response('Invalid time range', 'From timestamp must be before to timestamp', 'INVALID_TIME_RANGE')
+    step = int(step or 60)
+    points = make_time_range(start, end, step)
+    data = []
+    for ts in points:
+        delay = round(random.uniform(5.0, 30.0) * (1.0 if t.get('backhaul_state','Normal')=='Normal' else random.uniform(1.5,3.0)),2)
+        jitter = round(random.uniform(0.5, 4.0),2)
+        errors = round(random.uniform(0.0, 0.2) * (1.0 if t.get('backhaul_state','Normal')=='Normal' else random.uniform(1.0,5.0)),3)
+        data.append({'timestamp': ts.isoformat(), 'delay_ms': delay, 'jitter_ms': jitter, 'errors_per_second': errors})
+    return {'tower_id': tower_id, 'data': data}
+
+
+@app.get('/api/towers/{tower_id}/metrics/handover/timeseries')
+async def tower_handover_timeseries(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None, step: Optional[int] = 60):
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    default_from = now - timedelta(hours=6)
+    start = parse_time_or_default(from_ts, default_from)
+    end = parse_time_or_default(to_ts, now)
+    if start >= end:
+        return error_response('Invalid time range', 'From timestamp must be before to timestamp', 'INVALID_TIME_RANGE')
+    step = int(step or 60)
+    points = make_time_range(start, end, step)
+    data = []
+    for ts in points:
+        attempts = max(0, int(random.gauss(100, 30)))
+        failures = max(0, int(attempts * random.uniform(0.0, 0.05)))
+        success_rate = 100.0 * (1.0 - (failures / attempts)) if attempts > 0 else 100.0
+        data.append({'timestamp': ts.isoformat(), 'success_rate_percent': round(success_rate,2), 'attempts': attempts, 'failures': failures})
+    return {'tower_id': tower_id, 'data': data}
+
+
+@app.get('/api/towers/{tower_id}/alerts')
+async def tower_alerts(tower_id: str, limit: Optional[int] = 50, status: Optional[str] = 'active'):
+    # SIM.alerts contains active alerts only; support basic filtering
+    all_alerts = [a for a in SIM.alerts.values() if a.get('tower_id') == tower_id]
+    if status and status != 'all':
+        # only support 'active' in this simulator; others map to empty
+        if status == 'resolved':
+            all_alerts = []
+    limit = int(limit or 50)
+    out = []
+    for a in all_alerts[:limit]:
+        out.append({
+            'alert_id': a.get('alert_id'),
+            'priority': 1 if a.get('priority')=='P1' else (2 if a.get('priority')=='P2' else 3),
+            'alert_type': a.get('alert_type'),
+            'description': a.get('description'),
+            'started_at': (datetime.now(timezone.utc) - timedelta(minutes=a.get('duration_min', 0))).isoformat(),
+            'duration_minutes': int(a.get('duration_min', 0)),
+            'status': 'active',
+            'action_required': a.get('action_required', '')
+        })
+    return {'tower_id': tower_id, 'alerts': out}
+
+
+@app.get('/api/towers/{tower_id}/analysis/root-cause')
+async def tower_root_cause(tower_id: str, from_ts: Optional[str] = None, to_ts: Optional[str] = None):
+    # Very small synthetic analysis based on recent metrics and alerts
+    t = SIM.towers.get(tower_id)
+    if not t:
+        raise HTTPException(status_code=404, detail='Tower not found')
+    now = datetime.now(timezone.utc)
+    to_dt = parse_time_or_default(to_ts, now)
+    from_dt = parse_time_or_default(from_ts, now - timedelta(hours=6))
+
+    summary = ''
+    insights = []
+    # look at status and backhaul
+    if t.get('backhaul_state','Normal') != 'Normal':
+        summary = 'Backhaul degradation detected; likely root cause for elevated latency.'
+        insights.append({'type': 'backhaul', 'evidence': 'backhaul_state != Normal'})
+    elif t.get('congestion',0) == 1:
+        summary = 'High user load / congestion is the likely cause of degraded performance.'
+        insights.append({'type': 'congestion', 'evidence': f"users_connected={t.get('users_connected',0)}"})
+    else:
+        summary = 'No single dominating fault; minor latency fluctuations observed.'
+        insights.append({'type': 'noise', 'evidence': 'no alerts, slight latency variance'})
+
+    result = {
+        'tower_id': tower_id,
+        'analysis_timestamp': now.isoformat(),
+        'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()},
+        'summary': summary,
+        'insights': insights
+    }
+    return result
+
+
 @app.post('/summarize', response_model=SummarizeResponse)
 async def summarize(payload: SummarizeRequest):
     """Receive towers/latest_metrics/alerts, call Groq LLM, and return a concise summary.

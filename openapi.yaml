@@ -170,3 +170,418 @@ paths:
                         tower_5: 1
                         tower_6: 0
 components: {}
+
+
+  /api/towers/{tower_id}/status:
+    get:
+      summary: Tower identity and status
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tower identification and status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  location_name:
+                    type: string
+                  latitude:
+                    type: number
+                  longitude:
+                    type: number
+                  status:
+                    type: integer
+                  uptime_hours:
+                    type: integer
+                  last_maintenance:
+                    type: string
+                    format: date-time
+                  backhaul_type:
+                    type: string
+                  supported_technologies:
+                    type: array
+                    items:
+                      type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/towers/{tower_id}/metrics/current:
+    get:
+      summary: Current real-time metrics for a tower
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  timestamp:
+                    type: string
+                    format: date-time
+                  latency_ms:
+                    type: number
+                  download_speed_mbps:
+                    type: number
+                  upload_speed_mbps:
+                    type: number
+                  active_users:
+                    type: integer
+                  congestion_percent:
+                    type: number
+                  health_score:
+                    type: number
+
+  /api/towers/{tower_id}/metrics/latency/timeseries:
+    get:
+      summary: Latency time series for a single tower
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 60
+      responses:
+        '200':
+          description: Latency timeseries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  metric:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                          format: date-time
+                        value:
+                          type: number
+
+  /api/towers/{tower_id}/metrics/users-congestion/timeseries:
+    get:
+      summary: User load and congestion timeseries
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 60
+      responses:
+        '200':
+          description: Users and congestion timeseries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                        active_users:
+                          type: integer
+                        congestion_active:
+                          type: integer
+
+  /api/towers/{tower_id}/metrics/packet-loss/timeseries:
+    get:
+      summary: Packet loss (uplink/downlink) timeseries
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 60
+      responses:
+        '200':
+          description: Packet loss time series
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                          format: date-time
+                        uplink_loss_percent:
+                          type: number
+                        downlink_loss_percent:
+                          type: number
+
+  /api/towers/{tower_id}/metrics/backhaul/timeseries:
+    get:
+      summary: Backhaul link quality time series
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 60
+      responses:
+        '200':
+          description: Backhaul metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                        delay_ms:
+                          type: number
+                        jitter_ms:
+                          type: number
+                        errors_per_second:
+                          type: number
+
+  /api/towers/{tower_id}/metrics/handover/timeseries:
+    get:
+      summary: Handover success rate timeseries
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 60
+      responses:
+        '200':
+          description: Handover metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                        success_rate_percent:
+                          type: number
+                        attempts:
+                          type: integer
+                        failures:
+                          type: integer
+
+  /api/towers/{tower_id}/alerts:
+    get:
+      summary: Recent alerts for a tower
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, resolved, all]
+            default: active
+      responses:
+        '200':
+          description: Recent alerts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        alert_id:
+                          type: string
+                        priority:
+                          type: integer
+                        alert_type:
+                          type: string
+                        description:
+                          type: string
+                        started_at:
+                          type: string
+                          format: date-time
+                        duration_minutes:
+                          type: integer
+                        status:
+                          type: string
+                        action_required:
+                          type: string
+
+  /api/towers/{tower_id}/analysis/root-cause:
+    get:
+      summary: AI-style root cause analysis (synthetic)
+      parameters:
+        - name: tower_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Root cause analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tower_id:
+                    type: string
+                  analysis_timestamp:
+                    type: string
+                    format: date-time
+                  time_window:
+                    type: object
+                    properties:
+                      from:
+                        type: string
+                        format: date-time
+                      to:
+                        type: string
+                        format: date-time
+                  summary:
+                    type: string
+                  insights:
+                    type: array
+                    items:
+                      type: object
