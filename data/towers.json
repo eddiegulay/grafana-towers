@@ -1,0 +1,13 @@
+{
+  "corridors": [
+    ["Tower-1", "Tower-5", "Tower-6"]
+  ],
+  "towers": [
+    {"tower_id":"Tower-1","latitude":59.3293,"longitude":18.0686,"location_name":"Gamla Stan"},
+    {"tower_id":"Tower-2","latitude":59.3326,"longitude":18.0649,"location_name":"Norrmalm"},
+    {"tower_id":"Tower-3","latitude":59.3340,"longitude":18.0700,"location_name":"Östermalm"},
+    {"tower_id":"Tower-4","latitude":59.3250,"longitude":18.0700,"location_name":"Södermalm"},
+    {"tower_id":"Tower-5","latitude":59.3380,"longitude":18.0550,"location_name":"Vasastan"},
+    {"tower_id":"Tower-6","latitude":59.3430,"longitude":18.0650,"location_name":"Haga"}
+  ]
+}

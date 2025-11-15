@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    image: grafana-towers:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  ngrok:
+    image: wernight/ngrok:latest
+    depends_on:
+      - app
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command: http app:8000 --log stdout
+    ports:
+      - "4040:4040" # ngrok web UI
