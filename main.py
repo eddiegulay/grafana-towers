@@ -817,24 +817,43 @@ async def tower_root_cause(tower_id: str, from_ts: Optional[str] = None, to_ts: 
         alerts_json = json.dumps(alerts_payload if not isinstance(alerts_payload, dict) else alerts_payload, indent=2, ensure_ascii=False, default=str)
 
         prompt = f"""
-You are a telecom network operations assistant. Provide a short root-cause style analysis for tower {tower_id} over the window {from_dt.isoformat()} to {to_dt.isoformat()}.
+You are a telecom network operations assistant. Provide a short, clean, root-cause style analysis for tower {tower_id} over the window {from_dt.isoformat()} to {to_dt.isoformat()}.
 
-Include: Situation (1-2 sentences), Key signals (bullets), Most likely root cause, Suggested next actions.
+Produce the output as plain text only. Do not use markdown, do not use headings, do not use symbols such as #, -, *, •, or formatting blocks. Write in normal sentences and indentation only.
 
-### Tower
+The structure of the response should follow this order:
+
+
+(1-2 sentences describing the overall condition)
+
+Key signals:
+Write them as short separate lines, not bullets, not numbered. Just start each line on a new line.
+
+Most likely root cause:
+One short paragraph with the clearest underlying cause.
+
+Suggested next actions:
+Short paragraph describing the next operational steps.
+
+IMPORTANT: Do not repeat yourself or the data given
+
+Tower data:
 {t_json}
 
-### Latency timeseries
+Latency timeseries:
 {latency_json}
 
-### Users / congestion timeseries
+Users and congestion timeseries:
 {users_json}
 
-### Packet loss timeseries
+Packet loss timeseries:
 {packet_json}
 
-### Alerts
+Alerts:
 {alerts_json}
+
+Return the analysis as clean plain text with no markdown.
+
 """
 
         # If no GROQ key is configured, return a short synthetic analysis instead of calling the model
@@ -982,8 +1001,8 @@ async def _call_groq(prompt: str) -> str:
             resp = await client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="openai/gpt-oss-20b",
-                temperature=0.3,
-                max_completion_tokens=512,
+                temperature=0.5,
+                max_completion_tokens=1024,
                 reasoning_effort="medium",
                 top_p=1,
                 stream=False,
