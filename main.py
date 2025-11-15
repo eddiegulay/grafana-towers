@@ -8,10 +8,10 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 from datetime import datetime, timezone
 from pathlib import Path
 from simulator.state import SimulatorState
+from models import Tower, TowerMetrics, LatestMetrics, Alert, SummarizeRequest, SummarizeResponse
 
 # Import the async Groq client. The package is added to requirements.txt.
 from groq import AsyncGroq, APIError
@@ -29,7 +29,7 @@ async def startup_event():
 async def shutdown_event():
     await SIM.stop()
 
-@app.get('/live/towers')
+@app.get('/live/towers', response_model=List[Tower])
 async def live_towers():
     # map simulator towers to the response schema
     resp = []
@@ -44,43 +44,55 @@ async def live_towers():
             'upload_speed': t['upload_speed'],
             'location_name': t.get('location_name',''),
             'status': t['status'],
-            'weather': t.get('weather','Clear'),
-            'backhaul_state': t.get('backhaul_state','Normal'),
             'performance_delta': t.get('performance_delta',0.0)
         })
-    return JSONResponse(resp)
+    # return plain list -> FastAPI will validate/serialize using response_model
+    return resp
 
-@app.get('/live/metrics')
+@app.get('/live/metrics', response_model=LatestMetrics)
 async def live_metrics():
     # snapshot
-    per_tower = {}
+    per_tower: Dict[str, Dict[str, Any]] = {}
     for tid, t in SIM.towers.items():
         per_tower[tid] = {
             'users_connected': int(t['users_connected']),
             'latency': t['latency'],
             'download_speed': t['download_speed'],
             'upload_speed': t['upload_speed'],
-            'congestion': int(t.get('congestion',0))
+            'congestion': int(t.get('congestion', 0))
         }
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(timezone.utc)
     global_events = {
-        'critical_events': sum(1 for t in SIM.towers.values() if t['status']=='Critical'),
-        'warning_events': sum(1 for t in SIM.towers.values() if t['status']=='Warning')
+        'critical_events': sum(1 for t in SIM.towers.values() if t['status'] == 'Critical'),
+        'warning_events': sum(1 for t in SIM.towers.values() if t['status'] == 'Warning')
     }
-    return JSONResponse({'timestamp': ts, 'per_tower': per_tower, 'global_events': global_events})
+    # Build typed payload; FastAPI will validate against LatestMetrics
+    payload = {
+        'timestamp': ts,
+        'per_tower': per_tower,
+        'global_events': global_events
+    }
+    return payload
 
-@app.get('/live/alerts')
+@app.get('/live/alerts', response_model=List[Alert])
 async def live_alerts():
-    return JSONResponse(list(SIM.alerts.values()))
+    # Build alerts list and restrict to the Alert schema fields to ensure OpenAPI compliance
+    out = []
+    for a in SIM.alerts.values():
+        out.append({
+            'alert_id': a.get('alert_id'),
+            'tower_id': a.get('tower_id'),
+            'location': a.get('location'),
+            'priority': a.get('priority'),
+            'alert_type': a.get('alert_type'),
+            'description': a.get('description'),
+            'duration_min': int(a.get('duration_min', 0)),
+            'action_required': a.get('action_required', '')
+        })
+    return out
 
 
-class SummarizeRequest(BaseModel):
-    towers: List[Any]
-    latest_metrics: Dict[str, Any]
-    alerts: List[Any]
-
-
-@app.post('/summarize')
+@app.post('/summarize', response_model=SummarizeResponse)
 async def summarize(payload: SummarizeRequest):
     """Receive towers/latest_metrics/alerts, call Groq LLM, and return a concise summary.
 
@@ -160,7 +172,8 @@ Keep it short, direct, and operational.
             if not summary_text:
                 raise HTTPException(status_code=500, detail='No summary returned from model')
 
-            return JSONResponse({"summary": summary_text})
+            # Return typed response
+            return {"summary": summary_text}
 
     except APIError as e:
         # groq API error
