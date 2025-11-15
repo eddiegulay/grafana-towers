@@ -581,7 +581,85 @@ components: {}
                         format: date-time
                   summary:
                     type: string
+                    description: |
+                      Concise human-readable analysis or root-cause summary produced by the LLM (or a
+                      synthetic fallback when LLM is not configured).
                   insights:
                     type: array
+                    description: Optional structured insights when synthetic analysis is returned.
                     items:
                       type: object
+                      additionalProperties: true
+
+  /live/summary:
+    get:
+      summary: Time-windowed operational summary (LLM)
+      description: >-
+        Produce a concise operational summary for the requested time window. This endpoint
+        collects simulator timeseries (latency, speed, users, congestion, events) and the
+        current tower snapshot and alerts, then calls the configured LLM to return an
+        operational summary. If an LLM key is not configured the endpoint returns a short
+        synthetic summary.
+      parameters:
+        - name: from_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO timestamp for the start of the window. Defaults to (now - 6 hours).
+        - name: to_ts
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO timestamp for the end of the window. Defaults to now.
+        - name: step
+          in: query
+          schema:
+            type: integer
+            default: 3600
+          description: Sampling step in seconds for timeseries returned to the LLM.
+        - name: tower_ids
+          in: query
+          schema:
+            type: string
+          description: Optional comma-separated list of tower ids to include (e.g. "Tower-1,Tower-5").
+      responses:
+        '200':
+          description: Summarization result (text) and metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                    description: The textual summary produced by the LLM (or synthetic fallback).
+                  generated_at:
+                    type: string
+                    format: date-time
+                    description: Timestamp when the summary was generated.
+                  from:
+                    type: string
+                    format: date-time
+                    description: Start of the analyzed window (if provided or defaulted).
+                  to:
+                    type: string
+                    format: date-time
+                    description: End of the analyzed window (if provided or defaulted).
+                  data_sources:
+                    type: object
+                    description: Optional quick counts about the data used (when LLM not configured or on errors).
+                    additionalProperties: true
+                  data_sources_error:
+                    type: string
+                    description: If timeseries collection failed, a short error message describing the failure.
+                  llm_error:
+                    type: string
+                    description: If the LLM call failed, a short error message.
+              examples:
+                fallback:
+                  summary: "# Network Situation Summary\n\n6 towers monitored, 0 active alerts."
+                  generated_at: "2025-11-15T12:00:00Z"
+                  from: "2025-11-15T06:00:00Z"
+                  to: "2025-11-15T12:00:00Z"

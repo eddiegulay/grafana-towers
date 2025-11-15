@@ -70,6 +70,23 @@ def normalize_tid_key(tid: str) -> str:
     return ''.join(c if c.isalnum() else '_' for c in tid).lower()
 
 
+def _last_n_entries(obj, n: int = 7):
+    """Return the last n entries for lists or for dicts with common list fields.
+
+    - If obj is a dict and contains a 'data' or 'alerts' key with a list, return that list's last n items.
+    - If obj is a list, return its last n items.
+    - Otherwise return obj unchanged.
+    """
+    if isinstance(obj, dict):
+        for key in ('data', 'alerts'):
+            if key in obj and isinstance(obj[key], list):
+                return obj[key][-n:]
+        return obj
+    if isinstance(obj, list):
+        return obj[-n:]
+    return obj
+
+
 # Import the async Groq client. The package is added to requirements.txt.
 from groq import AsyncGroq, APIError
 
@@ -385,11 +402,18 @@ async def live_summary(from_ts: Optional[str] = None, to_ts: Optional[str] = Non
 
     # Build prompt with embedded JSON for the LLM
     towers_json = json.dumps(towers_resp, indent=2, ensure_ascii=False, default=str)
-    latency_json = json.dumps(latency_ts.get('data') if isinstance(latency_ts, dict) else latency_ts, indent=2, ensure_ascii=False, default=str)
-    speed_json = json.dumps(speed_ts.get('data') if isinstance(speed_ts, dict) else speed_ts, indent=2, ensure_ascii=False, default=str)
-    users_json = json.dumps(users_ts.get('data') if isinstance(users_ts, dict) else users_ts, indent=2, ensure_ascii=False, default=str)
-    congestion_json = json.dumps(congestion_ts.get('data') if isinstance(congestion_ts, dict) else congestion_ts, indent=2, ensure_ascii=False, default=str)
-    events_json = json.dumps(events_ts.get('data') if isinstance(events_ts, dict) else events_ts, indent=2, ensure_ascii=False, default=str)
+    # Reduce timeseries size to the last 7 points to keep prompts short
+    latency_payload = _last_n_entries(latency_ts)
+    speed_payload = _last_n_entries(speed_ts)
+    users_payload = _last_n_entries(users_ts)
+    congestion_payload = _last_n_entries(congestion_ts)
+    events_payload = _last_n_entries(events_ts)
+
+    latency_json = json.dumps(latency_payload if not isinstance(latency_payload, dict) else latency_payload, indent=2, ensure_ascii=False, default=str)
+    speed_json = json.dumps(speed_payload if not isinstance(speed_payload, dict) else speed_payload, indent=2, ensure_ascii=False, default=str)
+    users_json = json.dumps(users_payload if not isinstance(users_payload, dict) else users_payload, indent=2, ensure_ascii=False, default=str)
+    congestion_json = json.dumps(congestion_payload if not isinstance(congestion_payload, dict) else congestion_payload, indent=2, ensure_ascii=False, default=str)
+    events_json = json.dumps(events_payload if not isinstance(events_payload, dict) else events_payload, indent=2, ensure_ascii=False, default=str)
 
     prompt = f"""
 You are a telecom network operations assistant. Produce a concise operational summary for the time window {start.isoformat()} to {end.isoformat()}.
@@ -766,17 +790,31 @@ async def tower_root_cause(tower_id: str, from_ts: Optional[str] = None, to_ts: 
     except Exception as e:
         # revert to synthetic analysis if any collection fails
         summary = 'Insufficient data to perform LLM-based analysis; returning synthetic result.'
-        insights = [{'type': 'error', 'evidence': str(e)}]
-        return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary, 'insights': insights}
+        # return insights as an id-keyed dict for easier consumption
+        insights = {'error': str(e)}
+        return {
+            'tower_id': tower_id,
+            'analysis_timestamp': now.isoformat(),
+            'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()},
+            'summary': summary,
+            'insights': insights
+        }
 
     # Build prompt
     try:
         t_json = json.dumps(t, indent=2, ensure_ascii=False, default=str)
-        latency_json = json.dumps(latency.get('data') if isinstance(latency, dict) else latency, indent=2, ensure_ascii=False, default=str)
-        users_json = json.dumps(users_cong.get('data') if isinstance(users_cong, dict) else users_cong, indent=2, ensure_ascii=False, default=str)
-        packet_json = json.dumps(packet.get('data') if isinstance(packet, dict) else packet, indent=2, ensure_ascii=False, default=str)
-        backhaul_json = json.dumps(backhaul.get('data') if isinstance(backhaul, dict) else backhaul, indent=2, ensure_ascii=False, default=str)
-        alerts_json = json.dumps(alerts.get('alerts') if isinstance(alerts, dict) else alerts, indent=2, ensure_ascii=False, default=str)
+        # Keep only the last 7 entries for each timeseries to reduce prompt size
+        latency_payload = _last_n_entries(latency)
+        users_payload = _last_n_entries(users_cong)
+        packet_payload = _last_n_entries(packet)
+        backhaul_payload = _last_n_entries(backhaul)
+        alerts_payload = _last_n_entries(alerts)
+
+        latency_json = json.dumps(latency_payload if not isinstance(latency_payload, dict) else latency_payload, indent=2, ensure_ascii=False, default=str)
+        users_json = json.dumps(users_payload if not isinstance(users_payload, dict) else users_payload, indent=2, ensure_ascii=False, default=str)
+        packet_json = json.dumps(packet_payload if not isinstance(packet_payload, dict) else packet_payload, indent=2, ensure_ascii=False, default=str)
+        backhaul_json = json.dumps(backhaul_payload if not isinstance(backhaul_payload, dict) else backhaul_payload, indent=2, ensure_ascii=False, default=str)
+        alerts_json = json.dumps(alerts_payload if not isinstance(alerts_payload, dict) else alerts_payload, indent=2, ensure_ascii=False, default=str)
 
         prompt = f"""
 You are a telecom network operations assistant. Provide a short root-cause style analysis for tower {tower_id} over the window {from_dt.isoformat()} to {to_dt.isoformat()}.
@@ -795,9 +833,6 @@ Include: Situation (1-2 sentences), Key signals (bullets), Most likely root caus
 ### Packet loss timeseries
 {packet_json}
 
-### Backhaul timeseries
-{backhaul_json}
-
 ### Alerts
 {alerts_json}
 """
@@ -808,22 +843,36 @@ Include: Situation (1-2 sentences), Key signals (bullets), Most likely root caus
             summary = 'LLM not configured; returning synthetic root-cause hint. Check tower metrics and backhaul state.'
             insights = []
             if t.get('backhaul_state','Normal') != 'Normal':
-                insights.append({'type': 'backhaul', 'evidence': 'backhaul_state != Normal'})
+                insights = {'backhaul': 'backhaul_state != Normal'}
             elif t.get('congestion',0) == 1:
-                insights.append({'type': 'congestion', 'evidence': f"users_connected={t.get('users_connected',0)}"})
+                insights = {'congestion': f"users_connected={t.get('users_connected',0)}"}
             else:
-                insights.append({'type': 'noise', 'evidence': 'no alerts, slight latency variance'})
-            return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary, 'insights': insights}
+                insights = {'noise': 'no alerts, slight latency variance'}
+            return {
+                'tower_id': tower_id,
+                'analysis_timestamp': now.isoformat(),
+                'time_window_from': from_dt.isoformat(), 
+                'time_window_to': to_dt.isoformat(),
+                'summary': summary,
+                'insights': insights
+            }
 
         summary_text = await _call_groq(prompt)
-        return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary_text}
+        return [{'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary_text}]
     except HTTPException:
         raise
     except Exception as e:
         # fallback synthetic
         summary = 'LLM summarization failed; returning synthetic analysis.'
-        insights = [{'type': 'error', 'evidence': str(e)}]
-        return {'tower_id': tower_id, 'analysis_timestamp': now.isoformat(), 'time_window': {'from': from_dt.isoformat(), 'to': to_dt.isoformat()}, 'summary': summary, 'insights': insights}
+        insights = {'error': str(e)}
+        return [{
+            'tower_id': tower_id,
+            'analysis_timestamp': now.isoformat(),
+            'time_window_from': from_dt.isoformat(), 
+            'time_window_to': to_dt.isoformat(),
+            'summary': summary,
+            'insights': insights
+        }]
 
 
 @app.post('/summarize', response_model=SummarizeResponse)
